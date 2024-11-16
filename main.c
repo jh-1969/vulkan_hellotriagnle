@@ -31,6 +31,9 @@ struct {
   VkInstance instance;
   VkDebugUtilsMessengerEXT debugMessenger;
   VkPhysicalDevice physicalDevice;
+  VkPhysicalDeviceFeatures deviceFeatures;
+  VkDevice device;
+  VkQueue graphicsQueue;
 } typedef App;
 
 void app_run(App* app);
@@ -45,6 +48,8 @@ bool app_private_init_vulkan_create_instance_check_layer_support(const char **la
 void app_private_init_vulkan_setup_debug_messenger(App *app);
 
 void app_private_init_vulkan_pick_device(App *app);
+
+void app_private_init_vulkan_create_logical_device(App *app);
 //------------------------------------
 VkDebugUtilsMessengerCreateInfoEXT app_private_populate_debug_messenger_info();
 //------------------------------------
@@ -93,6 +98,7 @@ void app_private_init_vulkan(App* app) {
     app_private_init_vulkan_setup_debug_messenger(app);
 
   app_private_init_vulkan_pick_device(app);
+  app_private_init_vulkan_create_logical_device(app);
 }
 
 void app_private_init_vulkan_create_instance(App* app) {
@@ -217,14 +223,49 @@ void app_private_init_vulkan_pick_device(App *app) {
 
   for(int i = 0; i < deviceCount; i++) {
     QueueFamilyIndices indices = queue_families_find(devices[i]);
-
     if(indices.hasValue) {
       app->physicalDevice = devices[i];
       break;
     }
   }
-
   free(devices);
+}
+
+void app_private_init_vulkan_create_logical_device(App *app) {
+  QueueFamilyIndices indices = queue_families_find(app->physicalDevice);
+
+  VkDeviceQueueCreateInfo queueCreateInfo;
+  queueCreateInfo.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
+  queueCreateInfo.queueFamilyIndex = indices.graphicsFamily;
+  queueCreateInfo.queueCount = 1;
+
+  float queuePriority = 1.0f;
+  queueCreateInfo.pQueuePriorities = &queuePriority;
+
+  queueCreateInfo.pNext = NULL;
+  queueCreateInfo.flags = 0;
+
+  VkDeviceCreateInfo createInfo;
+  createInfo.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
+
+  createInfo.pQueueCreateInfos = &queueCreateInfo;
+  createInfo.queueCreateInfoCount = 1;
+
+  app->deviceFeatures = (VkPhysicalDeviceFeatures) {VK_FALSE};
+  createInfo.pEnabledFeatures = &app->deviceFeatures;
+
+  createInfo.enabledExtensionCount = 0;
+  createInfo.enabledLayerCount = 0;
+
+  createInfo.pNext = NULL;
+  createInfo.flags = 0;
+
+  if (vkCreateDevice(app->physicalDevice, &createInfo, NULL, &app->device) != VK_SUCCESS) {
+    printf("failed to create logical device");
+    exit(1);
+  }
+
+  vkGetDeviceQueue(app->device, indices.graphicsFamily, 0, &app->graphicsQueue);
 }
 
 VkDebugUtilsMessengerCreateInfoEXT app_private_populate_debug_messenger_info() {
@@ -248,6 +289,7 @@ VKAPI_ATTR VkBool32 VKAPI_CALL app_private_debug_callback(
   const VkDebugUtilsMessengerCallbackDataEXT *pCallbackData,
   void *pUserData) {
 
+  printf("\n");
   printf("%s", pCallbackData->pMessage);
   printf("\n");
 
@@ -261,6 +303,8 @@ void app_private_main_loop(App* app) {
 }
 
 void app_private_cleanup(App* app) {
+  vkDestroyDevice(app->device, NULL);
+
   PFN_vkDestroyDebugUtilsMessengerEXT func = (PFN_vkDestroyDebugUtilsMessengerEXT)
     vkGetInstanceProcAddr(app->instance, "vkDestroyDebugUtilsMessengerEXT");
 
