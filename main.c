@@ -3,6 +3,7 @@
 #include <stdlib.h>
 #include <stdbool.h>
 #include <string.h>
+#include <vulkan/vulkan_core.h>
 
 #define GLFW_INCLUDE_VULKAN
 #include <GLFW/glfw3.h>
@@ -29,9 +30,8 @@ struct {
   GLFWwindow *window;
   VkInstance instance;
   VkDebugUtilsMessengerEXT debugMessenger;
+  VkPhysicalDevice physicalDevice;
 } typedef App;
-
-
 
 void app_run(App* app);
 //------------------------------------
@@ -39,22 +39,34 @@ void app_private_init_window(App *app);
 //------------------------------------
 void app_private_init_vulkan(App *app);
 
-void app_private_init_vulkan_create_instance(App* app);
-bool app_private_init_vulkan_create_instance_check_layer_support(const char** layers, uint8_t layerCount);
+void app_private_init_vulkan_create_instance(App *app);
+bool app_private_init_vulkan_create_instance_check_layer_support(const char **layers, uint8_t layerCount);
 
 void app_private_init_vulkan_setup_debug_messenger(App *app);
 
+void app_private_init_vulkan_pick_device(App *app);
+//------------------------------------
 VkDebugUtilsMessengerCreateInfoEXT app_private_populate_debug_messenger_info();
 //------------------------------------
 VKAPI_ATTR VkBool32 VKAPI_CALL app_private_debug_callback(
   VkDebugUtilsMessageSeverityFlagBitsEXT messageSeverity,
   VkDebugUtilsMessageTypeFlagsEXT messageType,
   const VkDebugUtilsMessengerCallbackDataEXT *pCallbackData,
-  void* pUserData);
+  void *pUserData);
 //------------------------------------
-void app_private_main_loop(App* app);
+void app_private_main_loop(App *app);
 //------------------------------------
-void app_private_cleanup(App* app);
+void app_private_cleanup(App *app);
+
+
+
+
+struct {
+  uint32_t graphicsFamily;
+  bool hasValue;
+} typedef QueueFamilyIndices;
+
+QueueFamilyIndices queue_families_find(VkPhysicalDevice device);
 
 
 
@@ -79,6 +91,8 @@ void app_private_init_vulkan(App* app) {
 
   if(globalValidationLayersEnabled)
     app_private_init_vulkan_setup_debug_messenger(app);
+
+  app_private_init_vulkan_pick_device(app);
 }
 
 void app_private_init_vulkan_create_instance(App* app) {
@@ -175,7 +189,7 @@ bool app_private_init_vulkan_create_instance_check_layer_support(const char **la
   return true;
 }
 
-void app_private_init_vulkan_setup_debug_messenger(App* app) {
+void app_private_init_vulkan_setup_debug_messenger(App *app) {
   VkDebugUtilsMessengerCreateInfoEXT createInfo = app_private_populate_debug_messenger_info();
 
   PFN_vkCreateDebugUtilsMessengerEXT func = (PFN_vkCreateDebugUtilsMessengerEXT)
@@ -187,6 +201,30 @@ void app_private_init_vulkan_setup_debug_messenger(App* app) {
     printf("failed to set up messenger\n");
     exit(1);
   }
+}
+
+void app_private_init_vulkan_pick_device(App *app) {
+  uint32_t deviceCount = 0;
+  vkEnumeratePhysicalDevices(app->instance, &deviceCount, NULL);
+
+  if(deviceCount == 0) {
+    printf("failed to find GPU with vulkan support");
+    exit(1);
+  }
+
+  VkPhysicalDevice* devices = calloc(deviceCount, sizeof(VkPhysicalDevice));
+  vkEnumeratePhysicalDevices(app->instance, &deviceCount, devices);
+
+  for(int i = 0; i < deviceCount; i++) {
+    QueueFamilyIndices indices = queue_families_find(devices[i]);
+
+    if(indices.hasValue) {
+      app->physicalDevice = devices[i];
+      break;
+    }
+  }
+
+  free(devices);
 }
 
 VkDebugUtilsMessengerCreateInfoEXT app_private_populate_debug_messenger_info() {
@@ -237,6 +275,30 @@ void app_private_cleanup(App* app) {
 
   glfwDestroyWindow(app->window);
   glfwTerminate();
+}
+
+
+
+QueueFamilyIndices queue_families_find(VkPhysicalDevice device) {
+  QueueFamilyIndices indices;
+
+  uint32_t queueFamiliesCount = 0;
+  vkGetPhysicalDeviceQueueFamilyProperties(device, &queueFamiliesCount, NULL);
+
+  VkQueueFamilyProperties *queueFamilies = calloc(queueFamiliesCount, sizeof(VkQueueFamilyProperties));
+  vkGetPhysicalDeviceQueueFamilyProperties(device, &queueFamiliesCount, queueFamilies);
+
+  for(int i = 0; i < queueFamiliesCount; i++) {
+    if(queueFamilies[i].queueFlags & VK_QUEUE_GRAPHICS_BIT) {
+      indices.graphicsFamily = 1;
+      indices.hasValue = true;
+
+      break;
+    }
+  }
+  free(queueFamilies);
+
+  return indices;
 }
 
 
