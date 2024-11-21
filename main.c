@@ -3,6 +3,7 @@
 #include <stdlib.h>
 #include <stdbool.h>
 #include <string.h>
+#include <strings.h>
 #include <vulkan/vulkan_core.h>
 
 #define GLFW_INCLUDE_VULKAN
@@ -10,6 +11,8 @@
 
 #define WINDOW_WIDTH 800
 #define WINDOW_HEIGHT 600
+
+#define CHECK_ALLOC_FOR_NULL(x) if((x) == NULL) {printf("could not allocate memory\n"); exit(1);}
 
 #ifdef NDEBUG
 const bool globalValidationLayersEnabled = false;
@@ -34,6 +37,8 @@ struct {
   VkPhysicalDeviceFeatures deviceFeatures;
   VkDevice device;
   VkQueue graphicsQueue;
+  VkQueue presentQueue;
+  VkSurfaceKHR surface;
 } typedef App;
 
 void app_run(App* app);
@@ -46,6 +51,8 @@ void app_private_init_vulkan_create_instance(App *app);
 bool app_private_init_vulkan_create_instance_check_layer_support(const char **layers, uint8_t layerCount);
 
 void app_private_init_vulkan_setup_debug_messenger(App *app);
+
+void app_private_init_vulkan_create_surface(App *app);
 
 void app_private_init_vulkan_pick_device(App *app);
 
@@ -65,14 +72,15 @@ void app_private_cleanup(App *app);
 
 
 
-
 struct {
   uint32_t graphicsFamily;
-  bool hasValue;
+  uint32_t presentFamily;
+  bool isComplete;
 } typedef QueueFamilyIndices;
 
-QueueFamilyIndices queue_families_find(VkPhysicalDevice device);
+const uint8_t globalQueueFamilyIndicesFieldCount = 2;
 
+QueueFamilyIndices queue_families_find(VkPhysicalDevice device, VkSurfaceKHR surface);
 
 
 void app_run(App* app) {
@@ -97,6 +105,7 @@ void app_private_init_vulkan(App* app) {
   if(globalValidationLayersEnabled)
     app_private_init_vulkan_setup_debug_messenger(app);
 
+  app_private_init_vulkan_create_surface(app);
   app_private_init_vulkan_pick_device(app);
   app_private_init_vulkan_create_logical_device(app);
 }
@@ -129,6 +138,7 @@ void app_private_init_vulkan_create_instance(App* app) {
   glfwExtensions = glfwGetRequiredInstanceExtensions(&glfwExtensionsCount);
 
   const char **debugGlfwExtensions = calloc(glfwExtensionsCount + 1, sizeof(char *));
+  CHECK_ALLOC_FOR_NULL(debugGlfwExtensions);
 
   VkDebugUtilsMessengerCreateInfoEXT debugMessengerCreateInfo = app_private_populate_debug_messenger_info();
   if (globalValidationLayersEnabled) {
@@ -158,6 +168,7 @@ void app_private_init_vulkan_create_instance(App* app) {
   vkEnumerateInstanceExtensionProperties(NULL, &extensionCount, NULL);
 
   VkExtensionProperties* extensions = calloc(extensionCount, sizeof(VkExtensionProperties));
+  CHECK_ALLOC_FOR_NULL(extensions);
   vkEnumerateInstanceExtensionProperties(NULL, &extensionCount, extensions);
 
   printf("available extensions:\n");
@@ -173,6 +184,7 @@ bool app_private_init_vulkan_create_instance_check_layer_support(const char **la
   vkEnumerateInstanceLayerProperties(&availableLayersCount, NULL);
 
   VkLayerProperties* availableLayers = calloc(availableLayersCount, sizeof(VkLayerProperties));
+  CHECK_ALLOC_FOR_NULL(availableLayers);
   vkEnumerateInstanceLayerProperties(&availableLayersCount, availableLayers);
 
   for(int i = 0; i < globalValidationLayersCount; i++) {
@@ -209,6 +221,13 @@ void app_private_init_vulkan_setup_debug_messenger(App *app) {
   }
 }
 
+void app_private_init_vulkan_create_surface(App *app) {
+  if(glfwCreateWindowSurface(app->instance, app->window, NULL, &app->surface) != VK_SUCCESS) {
+    printf("failed to create window");
+    exit(1);
+  }
+}
+
 void app_private_init_vulkan_pick_device(App *app) {
   uint32_t deviceCount = 0;
   vkEnumeratePhysicalDevices(app->instance, &deviceCount, NULL);
@@ -219,11 +238,13 @@ void app_private_init_vulkan_pick_device(App *app) {
   }
 
   VkPhysicalDevice* devices = calloc(deviceCount, sizeof(VkPhysicalDevice));
+  CHECK_ALLOC_FOR_NULL(devices);
   vkEnumeratePhysicalDevices(app->instance, &deviceCount, devices);
 
   for(int i = 0; i < deviceCount; i++) {
-    QueueFamilyIndices indices = queue_families_find(devices[i]);
-    if(indices.hasValue) {
+    QueueFamilyIndices indices = queue_families_find(devices[i], app->surface);
+
+    if(indices.isComplete) {
       app->physicalDevice = devices[i];
       break;
     }
@@ -232,24 +253,42 @@ void app_private_init_vulkan_pick_device(App *app) {
 }
 
 void app_private_init_vulkan_create_logical_device(App *app) {
-  QueueFamilyIndices indices = queue_families_find(app->physicalDevice);
+  QueueFamilyIndices indices = queue_families_find(app->physicalDevice, app->surface);
 
-  VkDeviceQueueCreateInfo queueCreateInfo;
-  queueCreateInfo.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
-  queueCreateInfo.queueFamilyIndex = indices.graphicsFamily;
-  queueCreateInfo.queueCount = 1;
+  uint8_t uniqueQueueFamilesCount = 0;
+  uint32_t *uniqueQueueFamilies = malloc(sizeof(uint32_t));
+  CHECK_ALLOC_FOR_NULL(uniqueQueueFamilies);
+
+  if (indices.graphicsFamily == indices.presentFamily) {
+    uniqueQueueFamilies[0] = indices.graphicsFamily;
+    uniqueQueueFamilesCount = 1;
+  } else {
+    uniqueQueueFamilies = realloc(uniqueQueueFamilies, 2 * sizeof(uint32_t));
+    CHECK_ALLOC_FOR_NULL(uniqueQueueFamilies);
+    uniqueQueueFamilies[0] = indices.graphicsFamily;
+    uniqueQueueFamilies[1] = indices.presentFamily;
+    uniqueQueueFamilesCount = 2;
+  }
+
+  VkDeviceQueueCreateInfo *queueCreateInfos = calloc(globalQueueFamilyIndicesFieldCount, sizeof(VkDeviceQueueCreateInfo));
+  CHECK_ALLOC_FOR_NULL(queueCreateInfos);
 
   float queuePriority = 1.0f;
-  queueCreateInfo.pQueuePriorities = &queuePriority;
 
-  queueCreateInfo.pNext = NULL;
-  queueCreateInfo.flags = 0;
+  for(int i = 0; i < uniqueQueueFamilesCount; i++) {
+    queueCreateInfos[i].sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
+    queueCreateInfos[i].queueFamilyIndex = uniqueQueueFamilies[i];
+    queueCreateInfos[i].queueCount = 1;
+    queueCreateInfos[i].pQueuePriorities = &queuePriority;
+    queueCreateInfos[i].pNext = NULL;
+    queueCreateInfos[i].flags = 0;
+  }
 
   VkDeviceCreateInfo createInfo;
   createInfo.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
 
-  createInfo.pQueueCreateInfos = &queueCreateInfo;
-  createInfo.queueCreateInfoCount = 1;
+  createInfo.queueCreateInfoCount = uniqueQueueFamilesCount;
+  createInfo.pQueueCreateInfos = queueCreateInfos;
 
   app->deviceFeatures = (VkPhysicalDeviceFeatures) {VK_FALSE};
   createInfo.pEnabledFeatures = &app->deviceFeatures;
@@ -266,6 +305,10 @@ void app_private_init_vulkan_create_logical_device(App *app) {
   }
 
   vkGetDeviceQueue(app->device, indices.graphicsFamily, 0, &app->graphicsQueue);
+  vkGetDeviceQueue(app->device, indices.presentFamily, 0, &app->presentQueue);
+
+  free(uniqueQueueFamilies);
+  free(queueCreateInfos);
 }
 
 VkDebugUtilsMessengerCreateInfoEXT app_private_populate_debug_messenger_info() {
@@ -304,6 +347,7 @@ void app_private_main_loop(App* app) {
 
 void app_private_cleanup(App* app) {
   vkDestroyDevice(app->device, NULL);
+  vkDestroySurfaceKHR(app->instance, app->surface, NULL);
 
   PFN_vkDestroyDebugUtilsMessengerEXT func = (PFN_vkDestroyDebugUtilsMessengerEXT)
     vkGetInstanceProcAddr(app->instance, "vkDestroyDebugUtilsMessengerEXT");
@@ -323,23 +367,39 @@ void app_private_cleanup(App* app) {
 
 
 
-QueueFamilyIndices queue_families_find(VkPhysicalDevice device) {
+QueueFamilyIndices queue_families_find(VkPhysicalDevice device, VkSurfaceKHR surface) {
   QueueFamilyIndices indices;
+  indices.isComplete = false;
 
   uint32_t queueFamiliesCount = 0;
   vkGetPhysicalDeviceQueueFamilyProperties(device, &queueFamiliesCount, NULL);
 
   VkQueueFamilyProperties *queueFamilies = calloc(queueFamiliesCount, sizeof(VkQueueFamilyProperties));
+  CHECK_ALLOC_FOR_NULL(queueFamilies);
   vkGetPhysicalDeviceQueueFamilyProperties(device, &queueFamiliesCount, queueFamilies);
 
   for(int i = 0; i < queueFamiliesCount; i++) {
-    if(queueFamilies[i].queueFlags & VK_QUEUE_GRAPHICS_BIT) {
-      indices.graphicsFamily = 1;
-      indices.hasValue = true;
+    uint8_t conditionsMet = 0;
 
+    VkBool32 presentSupport = false;
+    vkGetPhysicalDeviceSurfaceSupportKHR(device, i, surface, &presentSupport);
+
+    if(presentSupport) {
+      indices.presentFamily = i;
+      conditionsMet++;
+    }
+
+    if(queueFamilies[i].queueFlags & VK_QUEUE_GRAPHICS_BIT) {
+      indices.graphicsFamily = i;
+      conditionsMet++;
+    }
+
+    if(conditionsMet >= globalQueueFamilyIndicesFieldCount) {
+      indices.isComplete = true;
       break;
     }
   }
+
   free(queueFamilies);
 
   return indices;
