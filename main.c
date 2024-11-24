@@ -47,8 +47,10 @@ struct {
   VkSurfaceKHR surface;
   VkSwapchainKHR swapChain;
   VkImage* swapChainImages;
+  uint32_t swapChainImagesCount;
   VkFormat swapChainImageFormat;
   VkExtent2D swapChainExtent;
+  VkImageView* swapChainImageViews;
 } typedef App;
 
 void app_run(App* app);
@@ -72,7 +74,9 @@ void app_private_init_vulkan_create_logical_device(App *app);
 void app_private_init_vulkan_create_swap_chain(App* app);
 VkSurfaceFormatKHR app_private_init_vulkan_create_swap_chain_choose_format(VkSurfaceFormatKHR *availableFormats, uint32_t count);
 VkPresentModeKHR app_private_init_vulkan_create_swap_chain_choose_present_mode(VkPresentModeKHR *availablePresentModes, uint32_t count);
-VkExtent2D app_private_init_vulkan_create_swap_chain_choose_swap_extend(VkSurfaceCapabilitiesKHR *capabilities, GLFWwindow* window);
+VkExtent2D app_private_init_vulkan_create_swap_chain_choose_swap_extend(VkSurfaceCapabilitiesKHR *capabilities, GLFWwindow *window);
+
+void app_private_init_vulkan_create_image_views(App* app);
 //------------------------------------
 VkDebugUtilsMessengerCreateInfoEXT app_private_populate_debug_messenger_info();
 //------------------------------------
@@ -138,6 +142,7 @@ void app_private_init_vulkan(App* app) {
   app_private_init_vulkan_pick_device(app);
   app_private_init_vulkan_create_logical_device(app);
   app_private_init_vulkan_create_swap_chain(app);
+  app_private_init_vulkan_create_image_views(app);
 }
 
 void app_private_init_vulkan_create_instance(App* app) {
@@ -442,6 +447,7 @@ void app_private_init_vulkan_create_swap_chain(App *app) {
   }
 
   vkGetSwapchainImagesKHR(app->device, app->swapChain, &imageCount, NULL);
+  app->swapChainImagesCount = imageCount;
   app->swapChainImages = calloc(imageCount, sizeof(VkImage));
   CHECK_ALLOC_FOR_NULL(app->swapChainImages);
   vkGetSwapchainImagesKHR(app->device, app->swapChain, &imageCount, app->swapChainImages);
@@ -485,6 +491,35 @@ VkExtent2D app_private_init_vulkan_create_swap_chain_choose_swap_extend(VkSurfac
   }
 }
 
+void app_private_init_vulkan_create_image_views(App* app) {
+  app->swapChainImageViews = calloc(app->swapChainImagesCount, sizeof(VkImageView));
+  CHECK_ALLOC_FOR_NULL(app->swapChainImageViews);
+
+  for(int i = 0; i < app->swapChainImagesCount; i++) {
+    VkImageViewCreateInfo createInfo;
+    createInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+    createInfo.image = app->swapChainImages[i];
+    createInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    createInfo.format = app->swapChainImageFormat;
+    createInfo.components.r = VK_COMPONENT_SWIZZLE_IDENTITY;
+    createInfo.components.g = VK_COMPONENT_SWIZZLE_IDENTITY;
+    createInfo.components.b = VK_COMPONENT_SWIZZLE_IDENTITY;
+    createInfo.components.a = VK_COMPONENT_SWIZZLE_IDENTITY;
+    createInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    createInfo.subresourceRange.baseMipLevel = 0;
+    createInfo.subresourceRange.levelCount = 1;
+    createInfo.subresourceRange.baseArrayLayer = 0;
+    createInfo.subresourceRange.layerCount = 1;
+    createInfo.pNext = NULL;
+    createInfo.flags = 0;
+
+    if(vkCreateImageView(app->device, &createInfo, NULL, &app->swapChainImageViews[i]) != VK_SUCCESS) {
+      printf("failed to create image view\n");
+      exit(1);
+    }
+  }
+}
+
 VkDebugUtilsMessengerCreateInfoEXT app_private_populate_debug_messenger_info() {
   VkDebugUtilsMessengerCreateInfoEXT createInfo;
   createInfo.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT;
@@ -520,6 +555,10 @@ void app_private_main_loop(App* app) {
 }
 
 void app_private_cleanup(App* app) {
+  for(int i = 0; i < app->swapChainImagesCount; i++) {
+    vkDestroyImageView(app->device, app->swapChainImageViews[i], NULL);
+  }
+
   vkDestroySwapchainKHR(app->device, app->swapChain, NULL);
   vkDestroyDevice(app->device, NULL);
   vkDestroySurfaceKHR(app->instance, app->surface, NULL);
