@@ -4,6 +4,7 @@
 #include <stdbool.h>
 #include <string.h>
 #include <strings.h>
+#include <tgmath.h>
 #include <vulkan/vulkan_core.h>
 
 #define GLFW_INCLUDE_VULKAN
@@ -27,6 +28,11 @@ const char *globalValidationLayers[] = {
   "VK_LAYER_KHRONOS_validation"
 };
 
+const uint8_t globalDeviceExtensionCount = 1;
+const char* globalDeviceExtensions[] = {
+  VK_KHR_SWAPCHAIN_EXTENSION_NAME
+};
+
 
 
 struct {
@@ -39,6 +45,7 @@ struct {
   VkQueue graphicsQueue;
   VkQueue presentQueue;
   VkSurfaceKHR surface;
+  VkSwapchainKHR swapchain;
 } typedef App;
 
 void app_run(App* app);
@@ -48,15 +55,21 @@ void app_private_init_window(App *app);
 void app_private_init_vulkan(App *app);
 
 void app_private_init_vulkan_create_instance(App *app);
-bool app_private_init_vulkan_create_instance_check_layer_support(const char **layers, uint8_t layerCount);
+bool app_private_init_vulkan_create_instance_check_layer_support();
 
 void app_private_init_vulkan_setup_debug_messenger(App *app);
 
 void app_private_init_vulkan_create_surface(App *app);
 
 void app_private_init_vulkan_pick_device(App *app);
+bool app_private_init_vulkan_pick_device_check_device_extensions(VkPhysicalDevice device);
 
 void app_private_init_vulkan_create_logical_device(App *app);
+
+void app_private_init_vulkan_create_swap_chain(App* app);
+VkSurfaceFormatKHR app_private_init_vulkan_create_swap_chain_choose_format(VkSurfaceFormatKHR *availableFormats, uint32_t count);
+VkPresentModeKHR app_private_init_vulkan_create_swap_chain_choose_present_mode(VkPresentModeKHR *availablePresentModes, uint32_t count);
+VkExtent2D app_private_init_vulkan_create_swap_chain_choose_swap_extend(VkSurfaceCapabilitiesKHR *capabilities, GLFWwindow* window);
 //------------------------------------
 VkDebugUtilsMessengerCreateInfoEXT app_private_populate_debug_messenger_info();
 //------------------------------------
@@ -81,6 +94,19 @@ struct {
 const uint8_t globalQueueFamilyIndicesFieldCount = 2;
 
 QueueFamilyIndices queue_families_find(VkPhysicalDevice device, VkSurfaceKHR surface);
+
+
+
+struct {
+  VkSurfaceCapabilitiesKHR capabilities;
+  uint32_t formatsCount;
+  VkSurfaceFormatKHR* formats;
+  uint32_t presentModesCount;
+  VkPresentModeKHR* presentModes;
+} typedef SwapChainSupportDetails;
+
+SwapChainSupportDetails swap_chain_support_details_query(VkPhysicalDevice device, VkSurfaceKHR surface);
+void swap_chain_support_details_free(SwapChainSupportDetails details);
 
 
 void app_run(App* app) {
@@ -108,12 +134,13 @@ void app_private_init_vulkan(App* app) {
   app_private_init_vulkan_create_surface(app);
   app_private_init_vulkan_pick_device(app);
   app_private_init_vulkan_create_logical_device(app);
+  app_private_init_vulkan_create_swap_chain(app);
 }
 
 void app_private_init_vulkan_create_instance(App* app) {
-  if(globalValidationLayersEnabled &&
-     !app_private_init_vulkan_create_instance_check_layer_support(globalValidationLayers, globalValidationLayersCount))
-  {
+  if(globalValidationLayersEnabled
+     && !app_private_init_vulkan_create_instance_check_layer_support()
+  ){
     printf("validation layers unavailable\n");
     exit(1);
   }
@@ -164,6 +191,7 @@ void app_private_init_vulkan_create_instance(App* app) {
     exit(1);
   }
 
+  /* ----- listing extensions
   uint32_t extensionCount = 0;
   vkEnumerateInstanceExtensionProperties(NULL, &extensionCount, NULL);
 
@@ -174,12 +202,13 @@ void app_private_init_vulkan_create_instance(App* app) {
   printf("available extensions:\n");
   for (int i = 0; i < extensionCount; i++)
     printf("  %s\n", extensions[i].extensionName);
+  */
 
   free(debugGlfwExtensions);
-  free(extensions);
+  //free(extensions);
 }
 
-bool app_private_init_vulkan_create_instance_check_layer_support(const char **layers, uint8_t layerCount) {
+bool app_private_init_vulkan_create_instance_check_layer_support() {
   uint32_t availableLayersCount;
   vkEnumerateInstanceLayerProperties(&availableLayersCount, NULL);
 
@@ -241,15 +270,58 @@ void app_private_init_vulkan_pick_device(App *app) {
   CHECK_ALLOC_FOR_NULL(devices);
   vkEnumeratePhysicalDevices(app->instance, &deviceCount, devices);
 
+  bool devicePicked = false;
+
   for(int i = 0; i < deviceCount; i++) {
     QueueFamilyIndices indices = queue_families_find(devices[i], app->surface);
 
-    if(indices.isComplete) {
+    SwapChainSupportDetails details = swap_chain_support_details_query(devices[i], app->surface);
+
+    if(indices.isComplete
+       && app_private_init_vulkan_pick_device_check_device_extensions(devices[i])
+       && details.formatsCount != 0 && details.presentModesCount != 0
+    ){
       app->physicalDevice = devices[i];
+      devicePicked = true;
       break;
     }
+    swap_chain_support_details_free(details);
   }
+
+  if(!devicePicked) {
+    printf("suitable device not found\n");
+    exit(1);
+  }
+
   free(devices);
+}
+
+bool app_private_init_vulkan_pick_device_check_device_extensions(VkPhysicalDevice device) {
+  uint32_t availableExtensionsCount;
+  vkEnumerateDeviceExtensionProperties(device, NULL, &availableExtensionsCount, NULL);
+
+  VkExtensionProperties* availableExtensions = calloc(availableExtensionsCount, sizeof(VkExtensionProperties));
+  CHECK_ALLOC_FOR_NULL(availableExtensions);
+  vkEnumerateDeviceExtensionProperties(device, NULL, &availableExtensionsCount, availableExtensions);
+
+  for (int i = 0; i < globalDeviceExtensionCount; i++) {
+    bool extensionFound = false;
+
+    for(int j = 0; j < availableExtensionsCount; j++) {
+      if(strcmp(globalDeviceExtensions[i], availableExtensions[j].extensionName) == 0) {
+        extensionFound = true;
+        break;
+      }
+    }
+    if(!extensionFound) {
+      free(availableExtensions);
+      return false;
+    }
+  }
+  if(availableExtensions != NULL)
+    free(availableExtensions);
+
+  return true;
 }
 
 void app_private_init_vulkan_create_logical_device(App *app) {
@@ -293,8 +365,15 @@ void app_private_init_vulkan_create_logical_device(App *app) {
   app->deviceFeatures = (VkPhysicalDeviceFeatures) {VK_FALSE};
   createInfo.pEnabledFeatures = &app->deviceFeatures;
 
-  createInfo.enabledExtensionCount = 0;
-  createInfo.enabledLayerCount = 0;
+  createInfo.enabledExtensionCount = globalDeviceExtensionCount;
+  createInfo.ppEnabledExtensionNames = globalDeviceExtensions;
+
+  if(globalValidationLayersEnabled) {
+    createInfo.enabledLayerCount = globalValidationLayersCount;
+    createInfo.ppEnabledLayerNames = globalValidationLayers;
+  }
+  else
+    createInfo.enabledLayerCount = 0;
 
   createInfo.pNext = NULL;
   createInfo.flags = 0;
@@ -309,6 +388,90 @@ void app_private_init_vulkan_create_logical_device(App *app) {
 
   free(uniqueQueueFamilies);
   free(queueCreateInfos);
+}
+
+void app_private_init_vulkan_create_swap_chain(App *app) {
+  SwapChainSupportDetails swapChainSupport = swap_chain_support_details_query(app->physicalDevice, app->surface);
+
+  VkSurfaceFormatKHR surfaceFormat = app_private_init_vulkan_create_swap_chain_choose_format(swapChainSupport.formats, swapChainSupport.formatsCount);
+  VkPresentModeKHR presentMode = app_private_init_vulkan_create_swap_chain_choose_present_mode(swapChainSupport.presentModes, swapChainSupport.presentModesCount);
+  VkExtent2D extent = app_private_init_vulkan_create_swap_chain_choose_swap_extend(&swapChainSupport.capabilities, app->window);
+
+  uint32_t imageCount = swapChainSupport.capabilities.minImageCount + 1;
+
+  if (swapChainSupport.capabilities.maxImageCount > 0 && imageCount > swapChainSupport.capabilities.maxImageCount) {
+    imageCount = swapChainSupport.capabilities.maxImageCount;
+  }
+
+  VkSwapchainCreateInfoKHR createInfo;
+  createInfo.sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR;
+  createInfo.surface = app->surface;
+  createInfo.minImageCount = imageCount;
+  createInfo.imageFormat = surfaceFormat.format;
+  createInfo.imageColorSpace = surfaceFormat.colorSpace;
+  createInfo.imageExtent = extent;
+  createInfo.imageArrayLayers = 1;
+  createInfo.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+
+  QueueFamilyIndices indices = queue_families_find(app->physicalDevice, app->surface);
+  uint32_t queueFamilyIndices[] = {indices.graphicsFamily, indices.presentFamily};
+
+  if(indices.graphicsFamily != indices.presentFamily) {
+    createInfo.imageSharingMode = VK_SHARING_MODE_CONCURRENT;
+    createInfo.queueFamilyIndexCount = 2;
+    createInfo.pQueueFamilyIndices = queueFamilyIndices;
+  } else {
+    createInfo.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    createInfo.queueFamilyIndexCount = 0;
+    createInfo.pQueueFamilyIndices = NULL;
+  }
+  createInfo.preTransform = swapChainSupport.capabilities.currentTransform;
+  createInfo.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
+  createInfo.presentMode = presentMode;
+  createInfo.clipped = VK_TRUE;
+  createInfo.oldSwapchain = VK_NULL_HANDLE;
+  createInfo.pNext = NULL;
+  createInfo.flags = 0;
+
+  if(vkCreateSwapchainKHR(app->device, &createInfo, NULL, &app->swapchain) != VK_SUCCESS) {
+    printf("failed to create swapchain\n");
+    exit(1);
+  }
+
+  swap_chain_support_details_free(swapChainSupport);
+}
+
+VkSurfaceFormatKHR app_private_init_vulkan_create_swap_chain_choose_format(VkSurfaceFormatKHR *availableFormats, uint32_t count) {
+  for(int i = 0; i < count; i++) {
+    if(availableFormats[i].format == VK_FORMAT_B8G8R8A8_SRGB && availableFormats[i].colorSpace == VK_COLORSPACE_SRGB_NONLINEAR_KHR) {
+      return availableFormats[i];
+    }
+  }
+  return availableFormats[0];
+}
+
+VkPresentModeKHR app_private_init_vulkan_create_swap_chain_choose_present_mode(VkPresentModeKHR *availablePresentModes, uint32_t count) {
+  for(int i = 0; i < count; i++) {
+    if(availablePresentModes[i] == VK_PRESENT_MODE_MAILBOX_KHR) {
+      return availablePresentModes[i];
+    }
+  }
+  return VK_PRESENT_MODE_FIFO_KHR;
+}
+
+VkExtent2D app_private_init_vulkan_create_swap_chain_choose_swap_extend(VkSurfaceCapabilitiesKHR *capabilities, GLFWwindow* window) {
+  if(capabilities->currentExtent.width != UINT32_MAX) {
+    return capabilities->currentExtent;
+  } else {
+    int width = 0, height = 0;
+    glfwGetFramebufferSize(window, &width, &height);
+
+    VkExtent2D actualExtend = {
+      fmin(capabilities->maxImageExtent.width, fmax(width, capabilities->minImageExtent.width)),
+      fmax(capabilities->maxImageExtent.height, fmax(height, capabilities->minImageExtent.height))
+    };
+    return actualExtend;
+  }
 }
 
 VkDebugUtilsMessengerCreateInfoEXT app_private_populate_debug_messenger_info() {
@@ -346,6 +509,7 @@ void app_private_main_loop(App* app) {
 }
 
 void app_private_cleanup(App* app) {
+  vkDestroySwapchainKHR(app->device, app->swapchain, NULL);
   vkDestroyDevice(app->device, NULL);
   vkDestroySurfaceKHR(app->instance, app->surface, NULL);
 
@@ -403,6 +567,37 @@ QueueFamilyIndices queue_families_find(VkPhysicalDevice device, VkSurfaceKHR sur
   free(queueFamilies);
 
   return indices;
+}
+
+
+
+SwapChainSupportDetails swap_chain_support_details_query(VkPhysicalDevice device, VkSurfaceKHR surface) {
+  SwapChainSupportDetails details;
+
+  vkGetPhysicalDeviceSurfaceCapabilitiesKHR(device, surface, &details.capabilities);
+
+  vkGetPhysicalDeviceSurfaceFormatsKHR(device, surface, &details.formatsCount, NULL);
+
+  if(details.formatsCount != 0) {
+    details.formats = calloc(details.formatsCount, sizeof(VkSurfaceFormatKHR));
+    CHECK_ALLOC_FOR_NULL(details.formats);
+    vkGetPhysicalDeviceSurfaceFormatsKHR(device, surface, &details.formatsCount, details.formats);
+  }
+
+  vkGetPhysicalDeviceSurfacePresentModesKHR(device, surface, &details.presentModesCount, NULL);
+
+  if(details.presentModesCount != 0) {
+    details.presentModes = calloc(details.presentModesCount, sizeof(VkPresentModeKHR));
+    CHECK_ALLOC_FOR_NULL(details.presentModes);
+    vkGetPhysicalDeviceSurfacePresentModesKHR(device, surface, &details.presentModesCount, details.presentModes);
+  }
+
+  return details;
+}
+
+void swap_chain_support_details_free(SwapChainSupportDetails details) {
+  free(details.formats);
+  free(details.presentModes);
 }
 
 

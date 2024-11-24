@@ -1,5 +1,5 @@
 CFLAGS = -g -std=c17 -O2
-LDFLAGS = -lglfw -lvulkan -ldl -lpthread -lX11 -lXxf86vm -lXrandr -lXi
+LDFLAGS = -lglfw -lvulkan -ldl -lpthread -lX11 -lXxf86vm -lXrandr -lXi -lm
 
 VulkanTest: main.c
 	gcc $(CFLAGS) -o VulkanTest main.c $(LDFLAGS)
