@@ -45,7 +45,10 @@ struct {
   VkQueue graphicsQueue;
   VkQueue presentQueue;
   VkSurfaceKHR surface;
-  VkSwapchainKHR swapchain;
+  VkSwapchainKHR swapChain;
+  VkImage* swapChainImages;
+  VkFormat swapChainImageFormat;
+  VkExtent2D swapChainExtent;
 } typedef App;
 
 void app_run(App* app);
@@ -433,10 +436,18 @@ void app_private_init_vulkan_create_swap_chain(App *app) {
   createInfo.pNext = NULL;
   createInfo.flags = 0;
 
-  if(vkCreateSwapchainKHR(app->device, &createInfo, NULL, &app->swapchain) != VK_SUCCESS) {
+  if(vkCreateSwapchainKHR(app->device, &createInfo, NULL, &app->swapChain) != VK_SUCCESS) {
     printf("failed to create swapchain\n");
     exit(1);
   }
+
+  vkGetSwapchainImagesKHR(app->device, app->swapChain, &imageCount, NULL);
+  app->swapChainImages = calloc(imageCount, sizeof(VkImage));
+  CHECK_ALLOC_FOR_NULL(app->swapChainImages);
+  vkGetSwapchainImagesKHR(app->device, app->swapChain, &imageCount, app->swapChainImages);
+
+  app->swapChainImageFormat = surfaceFormat.format;
+  app->swapChainExtent = extent;
 
   swap_chain_support_details_free(swapChainSupport);
 }
@@ -509,7 +520,7 @@ void app_private_main_loop(App* app) {
 }
 
 void app_private_cleanup(App* app) {
-  vkDestroySwapchainKHR(app->device, app->swapchain, NULL);
+  vkDestroySwapchainKHR(app->device, app->swapChain, NULL);
   vkDestroyDevice(app->device, NULL);
   vkDestroySurfaceKHR(app->instance, app->surface, NULL);
 
