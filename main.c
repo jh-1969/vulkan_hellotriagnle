@@ -1,9 +1,11 @@
+#include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdbool.h>
 #include <string.h>
 #include <strings.h>
+#include <sys/types.h>
 #include <tgmath.h>
 #include <vulkan/vulkan_core.h>
 
@@ -76,7 +78,9 @@ VkSurfaceFormatKHR app_private_init_vulkan_create_swap_chain_choose_format(VkSur
 VkPresentModeKHR app_private_init_vulkan_create_swap_chain_choose_present_mode(VkPresentModeKHR *availablePresentModes, uint32_t count);
 VkExtent2D app_private_init_vulkan_create_swap_chain_choose_swap_extend(VkSurfaceCapabilitiesKHR *capabilities, GLFWwindow *window);
 
-void app_private_init_vulkan_create_image_views(App* app);
+void app_private_init_vulkan_create_image_views(App *app);
+
+void app_private_init_vulkan_create_graphics_pipeline(App* app);
 //------------------------------------
 VkDebugUtilsMessengerCreateInfoEXT app_private_populate_debug_messenger_info();
 //------------------------------------
@@ -114,6 +118,11 @@ struct {
 
 SwapChainSupportDetails swap_chain_support_details_query(VkPhysicalDevice device, VkSurfaceKHR surface);
 void swap_chain_support_details_free(SwapChainSupportDetails details);
+
+
+
+static uint8_t *helper_read_file(const char *filename, size_t *filesize);
+
 
 
 void app_run(App* app) {
@@ -520,6 +529,60 @@ void app_private_init_vulkan_create_image_views(App* app) {
   }
 }
 
+void app_private_init_vulkan_create_graphics_pipeline(App *app) {
+  size_t vertCodeSize, fragCodeSize;
+  uint8_t* vertShaderCode = helper_read_file("shaders/vert.spv", &vertCodeSize);
+  uint8_t* fragShaderCode = helper_read_file("shaders/frag.spv", &fragCodeSize);
+
+  if(vertShaderCode == NULL || fragShaderCode == NULL) {
+    printf("failed to load shader code\n");
+    exit(1);
+  }
+
+  VkShaderModuleCreateInfo vertModuleInfo;
+  vertModuleInfo.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+  vertModuleInfo.codeSize = vertCodeSize;
+  vertModuleInfo.pCode = (uint32_t*)vertShaderCode;
+  vertModuleInfo.pNext = NULL;
+
+  VkShaderModuleCreateInfo fragModuleInfo;
+  fragModuleInfo.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+  fragModuleInfo.codeSize = fragCodeSize;
+  fragModuleInfo.pCode = (uint32_t*)fragShaderCode;
+  fragModuleInfo.pNext = NULL;
+
+  VkShaderModule vertModule, fragModule;
+  if (vkCreateShaderModule(app->device, &vertModuleInfo, NULL, &vertModule) != VK_SUCCESS
+      || vkCreateShaderModule(app->device, &fragModuleInfo, NULL, &fragModule) != VK_SUCCESS
+  ){
+    printf("failed to create shader module\n");
+    exit(1);
+  }
+  VkPipelineShaderStageCreateInfo vertShaderStageInfo;
+  vertShaderStageInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+  vertShaderStageInfo.stage = VK_SHADER_STAGE_VERTEX_BIT;
+  vertShaderStageInfo.module = vertModule;
+  vertShaderStageInfo.pName = "main";
+  vertShaderStageInfo.pSpecializationInfo = NULL;
+  vertShaderStageInfo.pNext = NULL;
+
+  VkPipelineShaderStageCreateInfo fragShaderStageInfo;
+  fragShaderStageInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+  fragShaderStageInfo.stage = VK_SHADER_STAGE_FRAGMENT_BIT;
+  fragShaderStageInfo.module = fragModule;
+  fragShaderStageInfo.pName = "main";
+  fragShaderStageInfo.pSpecializationInfo = NULL;
+  fragShaderStageInfo.pNext = NULL;
+
+  VkPipelineShaderStageCreateInfo shaderStages[] = {vertShaderStageInfo, fragShaderStageInfo};
+
+  vkDestroyShaderModule(app->device, fragModule, NULL);
+  vkDestroyShaderModule(app->device, vertModule, NULL);
+
+  free(vertShaderCode);
+  free(fragShaderCode);
+}
+
 VkDebugUtilsMessengerCreateInfoEXT app_private_populate_debug_messenger_info() {
   VkDebugUtilsMessengerCreateInfoEXT createInfo;
   createInfo.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT;
@@ -648,6 +711,27 @@ SwapChainSupportDetails swap_chain_support_details_query(VkPhysicalDevice device
 void swap_chain_support_details_free(SwapChainSupportDetails details) {
   free(details.formats);
   free(details.presentModes);
+}
+
+
+
+static uint8_t *helper_read_file(const char *filename, size_t* filesize) {
+  FILE* fp = fopen(filename, "rb");
+
+  if(fp != NULL) {
+    fseek(fp, 0L, SEEK_END);
+
+    size_t fsize = ftell(fp);
+    uint8_t *buffer = calloc(fsize, 1);
+    CHECK_ALLOC_FOR_NULL(buffer);
+
+    fseek(fp, 0L, SEEK_SET);
+    fread(buffer, fsize, 1, fp);
+
+    *filesize = fsize;
+    return buffer;
+  } else
+    return NULL;
 }
 
 
