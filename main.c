@@ -55,6 +55,7 @@ struct {
   VkImageView* swapChainImageViews;
   VkRenderPass renderPass;
   VkPipelineLayout pipelineLayout;
+  VkPipeline graphicsPipeline;
 } typedef App;
 
 void app_run(App* app);
@@ -156,8 +157,8 @@ void app_private_init_vulkan(App* app) {
   app_private_init_vulkan_create_logical_device(app);
   app_private_init_vulkan_create_swap_chain(app);
   app_private_init_vulkan_create_image_views(app);
-  app_private_init_vulkan_create_graphics_pipeline(app);
   app_private_init_vulkan_create_render_pass(app);
+  app_private_init_vulkan_create_graphics_pipeline(app);
 }
 
 void app_private_init_vulkan_create_instance(App* app) {
@@ -536,7 +537,7 @@ void app_private_init_vulkan_create_image_views(App* app) {
 }
 
 void app_private_init_vulkan_create_render_pass(App *app) {
-  VkAttachmentDescription colorAttachment;
+  VkAttachmentDescription colorAttachment = {};
   colorAttachment.format = app->swapChainImageFormat;
   colorAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
   colorAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
@@ -545,29 +546,32 @@ void app_private_init_vulkan_create_render_pass(App *app) {
   colorAttachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
   colorAttachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
   colorAttachment.finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
-  colorAttachment.flags = 0;
 
-  VkAttachmentReference colorAttachmentRef;
+  VkAttachmentReference colorAttachmentRef = {};
   colorAttachmentRef.attachment = 0;
   colorAttachmentRef.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
 
-  VkSubpassDescription subpass;
+  VkSubpassDescription subpass = {};
   subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
   subpass.colorAttachmentCount = 1;
   subpass.pColorAttachments = &colorAttachmentRef;
-  subpass.pDepthStencilAttachment = NULL;
-  subpass.preserveAttachmentCount = 0;
-  subpass.flags = 0;
 
-  VkRenderPassCreateInfo renderPassInfo;
+  VkSubpassDependency dependency = {};
+  dependency.srcSubpass = VK_SUBPASS_EXTERNAL;
+  dependency.dstSubpass = 0;
+  dependency.srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+  dependency.srcAccessMask = 0;
+  dependency.dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+  dependency.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+
+  VkRenderPassCreateInfo renderPassInfo = {};
   renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
   renderPassInfo.attachmentCount = 1;
   renderPassInfo.pAttachments = &colorAttachment;
   renderPassInfo.subpassCount = 1;
   renderPassInfo.pSubpasses = &subpass;
-  renderPassInfo.dependencyCount = 0;
-  renderPassInfo.pNext = NULL;
-  renderPassInfo.flags = 0;
+  renderPassInfo.dependencyCount = 1;
+  renderPassInfo.pDependencies = &dependency;
 
   if(vkCreateRenderPass(app->device, &renderPassInfo, NULL, &app->renderPass) != VK_SUCCESS) {
     printf("failed to create render pass\n");
@@ -585,14 +589,14 @@ void app_private_init_vulkan_create_graphics_pipeline(App *app) {
     exit(1);
   }
 
-  VkShaderModuleCreateInfo vertModuleInfo;
+  VkShaderModuleCreateInfo vertModuleInfo = {};
   vertModuleInfo.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
   vertModuleInfo.codeSize = vertCodeSize;
   vertModuleInfo.pCode = (uint32_t*)vertShaderCode;
   vertModuleInfo.pNext = NULL;
   vertModuleInfo.flags = 0;
 
-  VkShaderModuleCreateInfo fragModuleInfo;
+  VkShaderModuleCreateInfo fragModuleInfo = {};
   fragModuleInfo.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
   fragModuleInfo.codeSize = fragCodeSize;
   fragModuleInfo.pCode = (uint32_t*)fragShaderCode;
@@ -606,7 +610,7 @@ void app_private_init_vulkan_create_graphics_pipeline(App *app) {
     printf("failed to create shader module\n");
     exit(1);
   }
-  VkPipelineShaderStageCreateInfo vertShaderStageInfo;
+  VkPipelineShaderStageCreateInfo vertShaderStageInfo = {};
   vertShaderStageInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
   vertShaderStageInfo.stage = VK_SHADER_STAGE_VERTEX_BIT;
   vertShaderStageInfo.module = vertModule;
@@ -615,7 +619,7 @@ void app_private_init_vulkan_create_graphics_pipeline(App *app) {
   vertShaderStageInfo.pNext = NULL;
   vertShaderStageInfo.flags = 0;
 
-  VkPipelineShaderStageCreateInfo fragShaderStageInfo;
+  VkPipelineShaderStageCreateInfo fragShaderStageInfo = {};
   fragShaderStageInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
   fragShaderStageInfo.stage = VK_SHADER_STAGE_FRAGMENT_BIT;
   fragShaderStageInfo.module = fragModule;
@@ -626,7 +630,7 @@ void app_private_init_vulkan_create_graphics_pipeline(App *app) {
 
   VkPipelineShaderStageCreateInfo shaderStages[] = {vertShaderStageInfo, fragShaderStageInfo};
 
-  VkPipelineVertexInputStateCreateInfo vertexInputInfo;
+  VkPipelineVertexInputStateCreateInfo vertexInputInfo = {};
   vertexInputInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
   vertexInputInfo.vertexBindingDescriptionCount = 0;
   vertexInputInfo.pVertexBindingDescriptions = NULL;
@@ -635,14 +639,23 @@ void app_private_init_vulkan_create_graphics_pipeline(App *app) {
   vertexInputInfo.pNext = NULL;
   vertexInputInfo.flags = 0;
 
-  VkPipelineInputAssemblyStateCreateInfo inputAssembly;
+  uint32_t dynamicStatesSize = 2;
+  VkDynamicState dynamicStates[] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
+  VkPipelineDynamicStateCreateInfo dynamicState = {};
+  dynamicState.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO,
+  dynamicState.dynamicStateCount = dynamicStatesSize,
+  dynamicState.pDynamicStates = dynamicStates;
+  dynamicState.pNext = NULL;
+  dynamicState.flags = 0;
+
+  VkPipelineInputAssemblyStateCreateInfo inputAssembly = {};
   inputAssembly.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
   inputAssembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
   inputAssembly.primitiveRestartEnable = VK_FALSE;
   inputAssembly.pNext = NULL;
   inputAssembly.flags = 0;
 
-  VkViewport viewport;
+  VkViewport viewport = {};
   viewport.x = 0.0f;
   viewport.y = 0.0f;
   viewport.width = (float)app->swapChainExtent.width;
@@ -650,12 +663,12 @@ void app_private_init_vulkan_create_graphics_pipeline(App *app) {
   viewport.minDepth = 0.0f;
   viewport.maxDepth = 1.0f;
 
-  VkRect2D scissor;
+  VkRect2D scissor = {};
   VkOffset2D offset = {0, 0};
   scissor.offset = offset;
   scissor.extent = app->swapChainExtent;
 
-  VkPipelineViewportStateCreateInfo viewportState;
+  VkPipelineViewportStateCreateInfo viewportState = {};
   viewportState.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
   viewportState.viewportCount = 1;
   viewportState.pViewports = &viewport;
@@ -664,7 +677,7 @@ void app_private_init_vulkan_create_graphics_pipeline(App *app) {
   viewportState.pNext = NULL;
   viewportState.flags = 0;
 
-  VkPipelineRasterizationStateCreateInfo rasterizer;
+  VkPipelineRasterizationStateCreateInfo rasterizer = {};
   rasterizer.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
   rasterizer.depthClampEnable = VK_FALSE;
   rasterizer.rasterizerDiscardEnable = VK_FALSE;
@@ -675,10 +688,11 @@ void app_private_init_vulkan_create_graphics_pipeline(App *app) {
   rasterizer.depthBiasConstantFactor = 0.0f;
   rasterizer.depthBiasClamp = 0.0f;
   rasterizer.depthBiasSlopeFactor = 0.0f;
+  rasterizer.lineWidth = 1.0f;
   rasterizer.pNext = NULL;
   rasterizer.flags = 0;
 
-  VkPipelineMultisampleStateCreateInfo multisampling;
+  VkPipelineMultisampleStateCreateInfo multisampling = {};
   multisampling.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
   multisampling.sampleShadingEnable = VK_FALSE;
   multisampling.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
@@ -689,7 +703,7 @@ void app_private_init_vulkan_create_graphics_pipeline(App *app) {
   multisampling.pNext = NULL;
   multisampling.flags = 0;
 
-  VkPipelineColorBlendAttachmentState colorBlendAttachment;
+  VkPipelineColorBlendAttachmentState colorBlendAttachment = {};
   colorBlendAttachment.colorWriteMask =
       VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
       VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
@@ -701,7 +715,7 @@ void app_private_init_vulkan_create_graphics_pipeline(App *app) {
   colorBlendAttachment.dstAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
   colorBlendAttachment.alphaBlendOp = VK_BLEND_OP_ADD;
 
-  VkPipelineColorBlendStateCreateInfo colorBlending;
+  VkPipelineColorBlendStateCreateInfo colorBlending = {};
   colorBlending.sType =
       VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
   colorBlending.logicOpEnable = VK_FALSE;
@@ -715,7 +729,7 @@ void app_private_init_vulkan_create_graphics_pipeline(App *app) {
   colorBlending.pNext = NULL;
   colorBlending.flags = 0;
 
-  VkPipelineLayoutCreateInfo pipelineLayoutInfo;
+  VkPipelineLayoutCreateInfo pipelineLayoutInfo = {};
   pipelineLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
   pipelineLayoutInfo.setLayoutCount = 0;
   pipelineLayoutInfo.pSetLayouts = NULL;
@@ -726,6 +740,31 @@ void app_private_init_vulkan_create_graphics_pipeline(App *app) {
 
   if(vkCreatePipelineLayout(app->device, &pipelineLayoutInfo, NULL, &app->pipelineLayout) != VK_SUCCESS) {
     printf("failed to create pipeline layout\n");
+    exit(1);
+  }
+
+  VkGraphicsPipelineCreateInfo pipelineInfo = {};
+  pipelineInfo.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+  pipelineInfo.stageCount = 2;
+  pipelineInfo.pStages = shaderStages;
+  pipelineInfo.pVertexInputState = &vertexInputInfo;
+  pipelineInfo.pInputAssemblyState = &inputAssembly;
+  pipelineInfo.pViewportState = &viewportState;
+  pipelineInfo.pRasterizationState = &rasterizer;
+  pipelineInfo.pMultisampleState = &multisampling;
+  pipelineInfo.pDepthStencilState = NULL;
+  pipelineInfo.pColorBlendState = &colorBlending;
+  pipelineInfo.pDynamicState = &dynamicState;
+  pipelineInfo.layout = app->pipelineLayout;
+  pipelineInfo.renderPass = app->renderPass;
+  pipelineInfo.subpass = 0;
+  pipelineInfo.basePipelineHandle = VK_NULL_HANDLE;
+  pipelineInfo.basePipelineIndex = -1;
+  pipelineInfo.pNext = NULL;
+  pipelineInfo.flags = 0;
+
+  if(vkCreateGraphicsPipelines(app->device, VK_NULL_HANDLE, 1, &pipelineInfo, NULL, &app->graphicsPipeline) != VK_SUCCESS) {
+    printf("failed to create graphics pipeline\n");
     exit(1);
   }
 
@@ -771,6 +810,7 @@ void app_private_main_loop(App* app) {
 }
 
 void app_private_cleanup(App* app) {
+  vkDestroyPipeline(app->device, app->graphicsPipeline, NULL);
   vkDestroyPipelineLayout(app->device, app->pipelineLayout, NULL);
   vkDestroyRenderPass(app->device, app->renderPass, NULL);
 
