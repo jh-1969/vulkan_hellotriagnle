@@ -60,6 +60,9 @@ struct {
   uint32_t swapChainFrameBuffersCount;
   VkCommandPool commandPool;
   VkCommandBuffer commandBuffer;
+  VkSemaphore imageAvailableSemaphore;
+  VkSemaphore renderFinishedSemaphore;
+  VkFence inFlightFence;
 } typedef App;
 
 void app_run(App* app);
@@ -96,6 +99,8 @@ void app_private_init_vulkan_create_frame_buffers(App *app);
 void app_private_init_vulkan_create_command_pool(App *app);
 
 void app_private_init_vulkan_create_command_buffer(App *app);
+
+void app_private_init_vulkan_create_sync_objects(App *app);
 //------------------------------------
 VkDebugUtilsMessengerCreateInfoEXT app_private_populate_debug_messenger_info();
 //------------------------------------
@@ -147,6 +152,9 @@ void app_run(App* app) {
   app_private_init_window(app);
   app_private_init_vulkan(app);
   app_private_main_loop(app);
+
+  vkDeviceWaitIdle(app->device);
+
   app_private_cleanup(app);
 }
 
@@ -175,6 +183,7 @@ void app_private_init_vulkan(App* app) {
   app_private_init_vulkan_create_frame_buffers(app);
   app_private_init_vulkan_create_command_pool(app);
   app_private_init_vulkan_create_command_buffer(app);
+  app_private_init_vulkan_create_sync_objects(app);
 }
 
 void app_private_init_vulkan_create_instance(App* app) {
@@ -230,21 +239,7 @@ void app_private_init_vulkan_create_instance(App* app) {
     exit(1);
   }
 
-  /* ----- listing extensions
-  uint32_t extensionCount = 0;
-  vkEnumerateInstanceExtensionProperties(NULL, &extensionCount, NULL);
-
-  VkExtensionProperties* extensions = calloc(extensionCount, sizeof(VkExtensionProperties));
-  CHECK_ALLOC_FOR_NULL(extensions);
-  vkEnumerateInstanceExtensionProperties(NULL, &extensionCount, extensions);
-
-  printf("available extensions:\n");
-  for (int i = 0; i < extensionCount; i++)
-    printf("  %s\n", extensions[i].extensionName);
-  */
-
   free(debugGlfwExtensions);
-  //free(extensions);
 }
 
 bool app_private_init_vulkan_create_instance_check_layer_support() {
@@ -839,6 +834,23 @@ void app_private_init_vulkan_create_command_buffer(App *app) {
   }
 }
 
+void app_private_init_vulkan_create_sync_objects(App *app) {
+  VkSemaphoreCreateInfo semaphoreInfo = {};
+  semaphoreInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
+
+  VkFenceCreateInfo fenceInfo = {};
+  fenceInfo.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+  fenceInfo.flags = VK_FENCE_CREATE_SIGNALED_BIT;
+
+  if(vkCreateSemaphore(app->device, &semaphoreInfo, NULL, &app->imageAvailableSemaphore) != VK_SUCCESS
+     || vkCreateSemaphore(app->device, &semaphoreInfo, NULL, &app->renderFinishedSemaphore) != VK_SUCCESS
+     || vkCreateFence(app->device, &fenceInfo, NULL, &app->inFlightFence) != VK_SUCCESS
+     ){
+    printf("failed to create sync objects");
+    exit(1);
+  }
+}
+
 VkDebugUtilsMessengerCreateInfoEXT app_private_populate_debug_messenger_info() {
   VkDebugUtilsMessengerCreateInfoEXT createInfo;
   createInfo.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT;
@@ -870,7 +882,52 @@ VKAPI_ATTR VkBool32 VKAPI_CALL app_private_debug_callback(
 void app_private_main_loop(App* app) {
   while(!glfwWindowShouldClose(app->window)) {
     glfwPollEvents();
+    app_private_main_loop_draw_frame(app);
   }
+}
+
+void app_private_main_loop_draw_frame(App* app) {
+  vkWaitForFences(app->device, 1, &app->inFlightFence, VK_TRUE, UINT64_MAX);
+  vkResetFences(app->device, 1, &app->inFlightFence);
+
+  uint32_t imageIndex;
+  vkAcquireNextImageKHR(app->device, app->swapChain, UINT64_MAX, app->imageAvailableSemaphore, VK_NULL_HANDLE, &imageIndex);
+
+  vkResetCommandBuffer(app->commandBuffer, 0);
+  app_private_main_loop_draw_frame_record_command_buffer(app, app->commandBuffer, imageIndex);
+
+  VkSubmitInfo submitInfo = {};
+  submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+
+  VkSemaphore waitSemaphores[] = {app->imageAvailableSemaphore};
+  VkSemaphore signalSemaphores[] = {app->renderFinishedSemaphore};
+
+  VkPipelineStageFlags waitStages[] = {VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT};
+  submitInfo.waitSemaphoreCount = 1;
+  submitInfo.pWaitSemaphores = waitSemaphores;
+  submitInfo.pWaitDstStageMask = waitStages;
+  submitInfo.commandBufferCount = 1;
+  submitInfo.pCommandBuffers = &app->commandBuffer;
+  submitInfo.signalSemaphoreCount = 1;
+  submitInfo.pSignalSemaphores = signalSemaphores;
+
+  if(vkQueueSubmit(app->graphicsQueue, 1, &submitInfo, app->inFlightFence) != VK_SUCCESS) {
+    printf("failed to submit to draw buffer\n");
+    exit(1);
+  }
+
+  VkPresentInfoKHR presentInfo = {};
+  VkSwapchainKHR swapChains[] = {app->swapChain};
+
+  presentInfo.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
+  presentInfo.waitSemaphoreCount = 1;
+  presentInfo.pWaitSemaphores = signalSemaphores;
+  presentInfo.swapchainCount = 1;
+  presentInfo.pSwapchains = swapChains;
+  presentInfo.pImageIndices = &imageIndex;
+  presentInfo.pResults = NULL;
+
+  vkQueuePresentKHR(app->presentQueue, &presentInfo);
 }
 
 void app_private_main_loop_draw_frame_record_command_buffer(App *app, VkCommandBuffer commandBuffer, uint32_t imageIndex) {
@@ -925,6 +982,10 @@ void app_private_main_loop_draw_frame_record_command_buffer(App *app, VkCommandB
 }
 
 void app_private_cleanup(App* app) {
+  vkDestroySemaphore(app->device, app->imageAvailableSemaphore, NULL);
+  vkDestroySemaphore(app->device, app->renderFinishedSemaphore, NULL);
+  vkDestroyFence(app->device, app->inFlightFence, NULL);
+
   vkDestroyCommandPool(app->device, app->commandPool, NULL);
 
   for(int i = 0; i < app->swapChainFrameBuffersCount; i++) {
@@ -943,14 +1004,16 @@ void app_private_cleanup(App* app) {
   vkDestroyDevice(app->device, NULL);
   vkDestroySurfaceKHR(app->instance, app->surface, NULL);
 
-  PFN_vkDestroyDebugUtilsMessengerEXT func = (PFN_vkDestroyDebugUtilsMessengerEXT)
-    vkGetInstanceProcAddr(app->instance, "vkDestroyDebugUtilsMessengerEXT");
+  if(globalValidationLayersEnabled) {
+    PFN_vkDestroyDebugUtilsMessengerEXT func = (PFN_vkDestroyDebugUtilsMessengerEXT)
+      vkGetInstanceProcAddr(app->instance, "vkDestroyDebugUtilsMessengerEXT");
 
-  if(func != NULL)
-    func(app->instance, app->debugMessenger, NULL);
-  else {
-    printf("failed to load messenger destroy function\n");
-    exit(1);
+    if(func != NULL)
+      func(app->instance, app->debugMessenger, NULL);
+    else {
+      printf("failed to load messenger destroy function\n");
+      exit(1);
+    }
   }
 
   vkDestroyInstance(app->instance, NULL);
