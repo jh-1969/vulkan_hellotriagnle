@@ -58,6 +58,8 @@ struct {
   VkPipeline graphicsPipeline;
   VkFramebuffer* swapChainFrameBuffers;
   uint32_t swapChainFrameBuffersCount;
+  VkCommandPool commandPool;
+  VkCommandBuffer commandBuffer;
 } typedef App;
 
 void app_run(App* app);
@@ -89,7 +91,11 @@ void app_private_init_vulkan_create_render_pass(App *app);
 
 void app_private_init_vulkan_create_graphics_pipeline(App *app);
 
-void app_private_init_vulkan_create_frame_buffers(App* app);
+void app_private_init_vulkan_create_frame_buffers(App *app);
+
+void app_private_init_vulkan_create_command_pool(App *app);
+
+void app_private_init_vulkan_create_command_buffer(App *app);
 //------------------------------------
 VkDebugUtilsMessengerCreateInfoEXT app_private_populate_debug_messenger_info();
 //------------------------------------
@@ -100,6 +106,9 @@ VKAPI_ATTR VkBool32 VKAPI_CALL app_private_debug_callback(
   void *pUserData);
 //------------------------------------
 void app_private_main_loop(App *app);
+
+void app_private_main_loop_draw_frame(App *app);
+void app_private_main_loop_draw_frame_record_command_buffer(App *app, VkCommandBuffer commandBuffer, uint32_t imageIndex);
 //------------------------------------
 void app_private_cleanup(App *app);
 
@@ -164,6 +173,8 @@ void app_private_init_vulkan(App* app) {
   app_private_init_vulkan_create_render_pass(app);
   app_private_init_vulkan_create_graphics_pipeline(app);
   app_private_init_vulkan_create_frame_buffers(app);
+  app_private_init_vulkan_create_command_pool(app);
+  app_private_init_vulkan_create_command_buffer(app);
 }
 
 void app_private_init_vulkan_create_instance(App* app) {
@@ -184,7 +195,6 @@ void app_private_init_vulkan_create_instance(App* app) {
   appInfo.pNext = NULL;
 
   VkInstanceCreateInfo createInfo;
-
   createInfo.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
   createInfo.pApplicationInfo = &appInfo;
 
@@ -802,6 +812,33 @@ void app_private_init_vulkan_create_frame_buffers(App* app) {
   }
 }
 
+void app_private_init_vulkan_create_command_pool(App *app) {
+  QueueFamilyIndices queueFamilyIndices = queue_families_find(app->physicalDevice, app->surface);
+
+  VkCommandPoolCreateInfo poolInfo = {};
+  poolInfo.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
+  poolInfo.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
+  poolInfo.queueFamilyIndex = queueFamilyIndices.graphicsFamily;
+
+  if(vkCreateCommandPool(app->device, &poolInfo, NULL, &app->commandPool) != VK_SUCCESS) {
+    printf("failed to create command pool\n");
+    exit(1);
+  }
+}
+
+void app_private_init_vulkan_create_command_buffer(App *app) {
+  VkCommandBufferAllocateInfo allocInfo = {};
+  allocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+  allocInfo.commandPool = app->commandPool;
+  allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+  allocInfo.commandBufferCount = 1;
+
+  if(vkAllocateCommandBuffers(app->device, &allocInfo, &app->commandBuffer) != VK_SUCCESS) {
+    printf("failed to create command buffers\n");
+    exit(1);
+  }
+}
+
 VkDebugUtilsMessengerCreateInfoEXT app_private_populate_debug_messenger_info() {
   VkDebugUtilsMessengerCreateInfoEXT createInfo;
   createInfo.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT;
@@ -836,7 +873,60 @@ void app_private_main_loop(App* app) {
   }
 }
 
+void app_private_main_loop_draw_frame_record_command_buffer(App *app, VkCommandBuffer commandBuffer, uint32_t imageIndex) {
+  VkCommandBufferBeginInfo beginInfo = {};
+  beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+  beginInfo.flags = 0;
+  beginInfo.pInheritanceInfo = NULL;
+
+  if(vkBeginCommandBuffer(commandBuffer, &beginInfo) != VK_SUCCESS) {
+    printf("failed to begin recording command buffer\n");
+    exit(1);
+  }
+
+  VkRenderPassBeginInfo renderPassInfo = {};
+  renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+  renderPassInfo.renderPass = app->renderPass;
+  renderPassInfo.framebuffer = app->swapChainFrameBuffers[imageIndex];
+
+  VkOffset2D zeroOffset = {0, 0};
+
+  renderPassInfo.renderArea.offset = zeroOffset;
+  renderPassInfo.renderArea.extent = app->swapChainExtent;
+
+  VkClearValue clearColor = {{{0.0f, 0.0f, 0.0f, 1.0f}}};
+  renderPassInfo.clearValueCount = 1;
+  renderPassInfo.pClearValues = &clearColor;
+
+  vkCmdBeginRenderPass(commandBuffer, &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
+  vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, app->graphicsPipeline);
+
+  VkViewport viewport = {};
+  viewport.x = 0.0f;
+  viewport.y = 0.0f;
+  viewport.width = (float)app->swapChainExtent.width;
+  viewport.height = (float)app->swapChainExtent.height;
+  viewport.minDepth = 0.0f;
+  viewport.maxDepth = 1.0f;
+  vkCmdSetViewport(commandBuffer, 0, 1, &viewport);
+
+  VkRect2D scissor = {};
+  scissor.offset = zeroOffset;
+  scissor.extent = app->swapChainExtent;
+  vkCmdSetScissor(commandBuffer, 0, 1, &scissor);
+
+  vkCmdDraw(commandBuffer, 3, 1, 0, 0);
+  vkCmdEndRenderPass(commandBuffer);
+
+  if(vkEndCommandBuffer(commandBuffer) != VK_SUCCESS) {
+    printf("failed to record command buffer\n");
+    exit(1);
+  }
+}
+
 void app_private_cleanup(App* app) {
+  vkDestroyCommandPool(app->device, app->commandPool, NULL);
+
   for(int i = 0; i < app->swapChainFrameBuffersCount; i++) {
     vkDestroyFramebuffer(app->device, app->swapChainFrameBuffers[i], NULL);
   }
