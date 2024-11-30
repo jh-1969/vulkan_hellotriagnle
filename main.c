@@ -52,10 +52,12 @@ struct {
   uint32_t swapChainImagesCount;
   VkFormat swapChainImageFormat;
   VkExtent2D swapChainExtent;
-  VkImageView* swapChainImageViews;
+  VkImageView* swapChainImageViews; //same length as swapChainImages
   VkRenderPass renderPass;
   VkPipelineLayout pipelineLayout;
   VkPipeline graphicsPipeline;
+  VkFramebuffer* swapChainFrameBuffers;
+  uint32_t swapChainFrameBuffersCount;
 } typedef App;
 
 void app_run(App* app);
@@ -85,7 +87,9 @@ void app_private_init_vulkan_create_image_views(App *app);
 
 void app_private_init_vulkan_create_render_pass(App *app);
 
-void app_private_init_vulkan_create_graphics_pipeline(App* app);
+void app_private_init_vulkan_create_graphics_pipeline(App *app);
+
+void app_private_init_vulkan_create_frame_buffers(App* app);
 //------------------------------------
 VkDebugUtilsMessengerCreateInfoEXT app_private_populate_debug_messenger_info();
 //------------------------------------
@@ -159,6 +163,7 @@ void app_private_init_vulkan(App* app) {
   app_private_init_vulkan_create_image_views(app);
   app_private_init_vulkan_create_render_pass(app);
   app_private_init_vulkan_create_graphics_pipeline(app);
+  app_private_init_vulkan_create_frame_buffers(app);
 }
 
 void app_private_init_vulkan_create_instance(App* app) {
@@ -775,6 +780,28 @@ void app_private_init_vulkan_create_graphics_pipeline(App *app) {
   free(fragShaderCode);
 }
 
+void app_private_init_vulkan_create_frame_buffers(App* app) {
+  app->swapChainFrameBuffersCount = app->swapChainImagesCount;
+  app->swapChainFrameBuffers = calloc(app->swapChainFrameBuffersCount, sizeof(VkFramebuffer));
+  CHECK_ALLOC_FOR_NULL(app->swapChainFrameBuffers);
+
+  for(int i = 0; i < app->swapChainFrameBuffersCount; i++) {
+    VkFramebufferCreateInfo framebufferInfo = {};
+    framebufferInfo.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
+    framebufferInfo.renderPass = app->renderPass;
+    framebufferInfo.attachmentCount = 1;
+    framebufferInfo.pAttachments = &app->swapChainImageViews[i];
+    framebufferInfo.width = app->swapChainExtent.width;
+    framebufferInfo.height = app->swapChainExtent.height;
+    framebufferInfo.layers = 1;
+
+    if(vkCreateFramebuffer(app->device, &framebufferInfo, NULL, &app->swapChainFrameBuffers[i]) != VK_SUCCESS) {
+      printf("failed to create %i. frame buffer\n", i);
+      exit(1);
+    }
+  }
+}
+
 VkDebugUtilsMessengerCreateInfoEXT app_private_populate_debug_messenger_info() {
   VkDebugUtilsMessengerCreateInfoEXT createInfo;
   createInfo.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT;
@@ -810,6 +837,10 @@ void app_private_main_loop(App* app) {
 }
 
 void app_private_cleanup(App* app) {
+  for(int i = 0; i < app->swapChainFrameBuffersCount; i++) {
+    vkDestroyFramebuffer(app->device, app->swapChainFrameBuffers[i], NULL);
+  }
+
   vkDestroyPipeline(app->device, app->graphicsPipeline, NULL);
   vkDestroyPipelineLayout(app->device, app->pipelineLayout, NULL);
   vkDestroyRenderPass(app->device, app->renderPass, NULL);
